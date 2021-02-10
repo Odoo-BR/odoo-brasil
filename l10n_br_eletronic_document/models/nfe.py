@@ -117,13 +117,11 @@ class EletronicDocument(models.Model):
                 errors.append('Cadastro da Empresa / CNPJ do escritório contabilidade')
         # NFC-e
         if self.model == 'nfce':
-            if len(self.company_id.id_token_csc or '') != 6:
+            if len(self.company_id.l10n_br_id_token_csc or '') != 6:
                 errors.append("Cadastro da Empresa - Identificador do CSC inválido")
-            if not len(self.company_id.csc or ''):
+            if not len(self.company_id.l10n_br_csc or ''):
                 errors.append("Cadastro da Empresa - CSC Inválido")
-            if self.partner_id.l10n_br_cnpj_cpf is None:
-                errors.append("CNPJ/CPF do Parceiro inválido")
-            if len(self.serie) == 0:
+            if len(self.serie_documento) == 0:
                 errors.append("Número de Série da NFe Inválido")
 
         partner = self.partner_id.commercial_partner_id
@@ -217,7 +215,7 @@ class EletronicDocument(models.Model):
             'indTot': item.indicador_total,
             'cfop': item.cfop,
             'CEST': re.sub('[^0-9]', '', item.cest or ''),
-            'xPed': item.pedido_compra or invoice.pedido_compra or '',
+            'xPed': (item.pedido_compra or invoice.pedido_compra or '')[:15],
             'nItemPed': item.item_pedido_compra or '',
         }
         di_vals = []
@@ -297,7 +295,7 @@ class EletronicDocument(models.Model):
         else:
             imposto.update({
                 'ICMS': {
-                    'orig':  item.origem,
+                    'orig':  item.product_id.l10n_br_origin,
                     'CST': item.icms_cst,
                     'modBC': item.icms_tipo_base,
                     'vBC': "%.02f" % item.icms_base_calculo,
@@ -519,7 +517,8 @@ class EletronicDocument(models.Model):
             'vST': "%.02f" % self.valor_icmsst,
             'vFCPST': '0.00',
             'vFCPSTRet': '0.00',
-            'vProd': "%.02f" % self.valor_bruto,
+            'vProd': "%.02f" % sum(self.document_line_ids.mapped(
+                "valor_bruto")),
             'vFrete': "%.02f" % self.valor_frete,
             'vSeg': "%.02f" % self.valor_seguro,
             'vDesc': "%.02f" % self.valor_desconto,
@@ -529,7 +528,8 @@ class EletronicDocument(models.Model):
             'vPIS': "%.02f" % self.pis_valor,
             'vCOFINS': "%.02f" % self.cofins_valor,
             'vOutro': "%.02f" % self.valor_despesas,
-            'vNF': "%.02f" % self.valor_final,
+            'vNF': "%.02f" % sum(self.document_line_ids.mapped(
+                "valor_liquido")),
             'vFCPUFDest': "%.02f" % self.valor_icms_fcp_uf_dest,
             'vICMSUFDest': "%.02f" % self.valor_icms_uf_dest,
             'vICMSUFRemet': "%.02f" % self.valor_icms_uf_remet,
@@ -537,36 +537,24 @@ class EletronicDocument(models.Model):
         }
         if self.valor_servicos > 0.0:
             issqn_total = {
-                'vServ': "%.02f" % self.valor_servicos
-                if self.valor_servicos else "",
-                'vBC': "%.02f" % self.valor_bc_iss
-                if self.valor_bc_iss else "",
-                'vISS': "%.02f" % self.valor_iss if self.valor_iss else "",
-                'vPIS': "%.02f" % self.valor_pis_servicos
-                if self.valor_pis_servicos else "",
-                'vCOFINS': "%.02f" % self.valor_cofins_servicos
-                if self.valor_cofins_servicos else "",
+                'vServ': "%.02f" % self.valor_servicos if self.valor_servicos else "",
+                'vBC': "%.02f" % self.iss_base_calculo if self.iss_base_calculo else "",
+                'vISS': "%.02f" % self.iss_valor if self.iss_valor else "",
+                'vPIS': "%.02f" % self.pis_valor if self.pis_valor else "",
+                'vCOFINS': "%.02f" % self.cofins_valor if self.cofins_valor else "",
                 'dCompet': dt_emissao[:10],
                 'vDeducao': "",
                 'vOutro': "",
-                'vISSRet': "%.02f" % self.valor_retencao_iss
-                if self.valor_retencao_iss else '',
+                'vISSRet': "%.02f" % self.iss_valor_retencao if self.iss_valor_retencao else '',
             }
             tributos_retidos = {
-                'vRetPIS': "%.02f" % self.valor_retencao_pis
-                if self.valor_retencao_pis else '',
-                'vRetCOFINS': "%.02f" % self.valor_retencao_cofins
-                if self.valor_retencao_cofins else '',
-                'vRetCSLL': "%.02f" % self.valor_retencao_csll
-                if self.valor_retencao_csll else '',
-                'vBCIRRF': "%.02f" % self.valor_bc_irrf
-                if self.valor_retencao_irrf else '',
-                'vIRRF': "%.02f" % self.valor_retencao_irrf
-                if self.valor_retencao_irrf else '',
-                'vBCRetPrev': "%.02f" % self.valor_bc_inss
-                if self.valor_retencao_inss else '',
-                'vRetPrev': "%.02f" % self.valor_retencao_inss
-                if self.valor_retencao_inss else '',
+                'vRetPIS': "%.02f" % self.iss_valor_retencao if self.iss_valor_retencao else '',
+                'vRetCOFINS': "%.02f" % self.cofins_valor_retencao if self.cofins_valor_retencao else '',
+                'vRetCSLL': "%.02f" % self.csll_valor_retencao if self.csll_valor_retencao else '',
+                'vBCIRRF': "%.02f" % self.irrf_base_calculo if self.irrf_valor_retencao else '',
+                'vIRRF': "%.02f" % self.irrf_valor_retencao if self.irrf_valor_retencao else '',
+                'vBCRetPrev': "%.02f" % self.inss_base_calculo if self.inss_valor_retencao else '',
+                'vRetPrev': "%.02f" % self.inss_valor_retencao if self.inss_valor_retencao else '',
             }
         if self.transportadora_id.street:
             end_transp = "%s - %s, %s" % (self.transportadora_id.street,
@@ -670,7 +658,7 @@ class EletronicDocument(models.Model):
                 'xContato': responsavel_tecnico.child_ids[0].name or '',
                 'email': responsavel_tecnico.email or '',
                 'fone': fone,
-                'idCSRT': self.company_id.id_token_csrt or '',
+                'idCSRT': self.company_id.l10n_br_id_token_csrt or '',
                 'hashCSRT': self._get_hash_csrt() or '',
             }
 
@@ -709,8 +697,8 @@ class EletronicDocument(models.Model):
             ambiente = 1 if self.ambiente == 'producao' else 2
             estado = self.company_id.state_id.l10n_br_ibge_code
 
-            cid_token = int(self.company_id.id_token_csc)
-            csc = self.company_id.csc
+            cid_token = int(self.company_id.l10n_br_id_token_csc)
+            csc = self.company_id.l10n_br_csc
 
             c_hash_QR_code = "{0}|2|{1}|{2}{3}".format(
                 chave_nfe, ambiente, int(cid_token), csc)
@@ -771,7 +759,7 @@ class EletronicDocument(models.Model):
         })
 
     def action_send_eletronic_invoice(self):
-        if self.model != 'nfe':
+        if self.model not in ['nfe', 'nfce']:
             return super(EletronicDocument, self).action_send_eletronic_invoice()
 
         if self.state in ('done', 'denied', 'cancel'):
@@ -1038,11 +1026,9 @@ class EletronicDocument(models.Model):
                                    retorno_consulta.xMotivo)
             raise UserError(message)
 
-
-
     def _get_hash_csrt(self):
         chave_nfe = self.chave_nfe
-        csrt = self.company_id.csrt
+        csrt = self.company_id.l10n_br_csrt
 
         if not csrt:
             return

@@ -43,7 +43,7 @@ class AccountMove(models.Model):
             if not invoice.payment_journal_id.receive_by_iugu:
                 continue
             partner = invoice.partner_id.commercial_partner_id
-            if not self.env.user.company_id.iugu_api_token:
+            if not self.env.company.iugu_api_token:
                 errors.append('Configure o token de API')
             if partner.is_company and not partner.l10n_br_legal_name:
                 errors.append('Destinatário - Razão Social')
@@ -71,7 +71,7 @@ class AccountMove(models.Model):
         base_url = (
             self.env["ir.config_parameter"].sudo().get_param("web.base.url")
         )
-        token = self.env.user.company_id.iugu_api_token
+        token = self.env.company.iugu_api_token
         iugu.config(token=token)
         iugu_invoice_api = iugu.Invoice()
 
@@ -150,8 +150,8 @@ class AccountMoveLine(models.Model):
     iugu_digitable_line = fields.Char(string="Linha Digitável", size=100, copy=False)
     iugu_barcode_url = fields.Char(string="Código de barras", size=100, copy=False)
 
-    def _create_bank_tax_move(self, iugu_data):
-        bank_taxes = iugu_data.get('taxes_paid_cents') / 100
+    def _create_bank_tax_move(self, fees_amount):
+        bank_taxes = fees_amount or 0
 
         ref = 'Taxa: %s' % self.name
         journal = self.move_id.payment_journal_id
@@ -220,7 +220,7 @@ class AccountMoveLine(models.Model):
 
     def action_verify_iugu_payment(self):
         if self.iugu_id:
-            token = self.env.user.company_id.iugu_api_token
+            token = self.env.company.iugu_api_token
             iugu.config(token=token)
             iugu_invoice_api = iugu.Invoice()
 
