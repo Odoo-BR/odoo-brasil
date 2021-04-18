@@ -5,12 +5,11 @@ from random import SystemRandom
 from odoo import api, fields, models
 from odoo.exceptions import UserError
 
-
 TYPE2EDOC = {
-    'out_invoice': 'saida',        # Customer Invoice
-    'in_invoice': 'entrada',          # Vendor Bill
-    'out_refund': 'entrada',        # Customer Refund
-    'in_refund': 'saida',          # Vendor Refund
+    'out_invoice': 'saida',  # Customer Invoice
+    'in_invoice': 'entrada',  # Vendor Bill
+    'out_refund': 'entrada',  # Customer Refund
+    'in_refund': 'saida',  # Vendor Refund
 }
 
 
@@ -88,6 +87,17 @@ class AccountMove(models.Model):
                 if not move.company_id.partner_id.country_id.l10n_br_ibge_code:
                     errors.append('Cadastro da Empresa / Endereço - Código do BC do país')
 
+            responsavel_tecnico = move.company_id.l10n_br_responsavel_tecnico_id
+            if responsavel_tecnico:
+                if not responsavel_tecnico.l10n_br_cnpj_cpf:
+                    errors.append("Configure o CNPJ do responsável técnico")
+                if not responsavel_tecnico.email:
+                    errors.append("Configure o Email do responsável técnico")
+                if not responsavel_tecnico.phone:
+                    errors.append("Configure o Telefone do responsável técnico")
+                if len(responsavel_tecnico.child_ids) == 0:
+                    errors.append("Adicione um contato para o responsável técnico!")
+
             has_products = has_services = False
             # produtos
             for eletr in move.invoice_line_ids:
@@ -96,22 +106,49 @@ class AccountMove(models.Model):
                 if eletr.product_id.type in ('consu', 'product'):
                     has_products = True
                 prod = "Produto: %s - %s" % (eletr.product_id.default_code,
-                                            eletr.product_id.name)
+                                             eletr.product_id.name)
                 if not eletr.product_id.default_code:
                     errors.append(
                         'Prod: %s - Código do produto' % (
                             eletr.product_id.name))
+                if has_products and not eletr.product_id.l10n_br_ncm_id:
+                    errors.append('%s - NCM do produto' % prod)
 
                 if not move.fiscal_position_id:
                     errors.append('Configure a posição fiscal')
                 if move.company_id.l10n_br_accountant_id and not \
-                    move.company_id.l10n_br_accountant_id.l10n_br_cnpj_cpf:
+                        move.company_id.l10n_br_accountant_id.l10n_br_cnpj_cpf:
                     errors.append('Cadastro da Empresa / CNPJ do escritório contabilidade')
 
             if has_products and not move.company_id.l10n_br_nfe_sequence:
                 errors.append('Configure a sequência para numeração de NFe')
             if has_services and not move.company_id.l10n_br_nfe_service_sequence:
                 errors.append('Configure a sequência para numeração de NFe de serviço')
+
+            # Verificar os campos necessários para envio de nfse (serviço)
+            if has_services:
+                cod_municipio = '%s%s' % (
+                    move.company_id.state_id.l10n_br_ibge_code,
+                    move.company_id.city_id.l10n_br_ibge_code,
+                )
+                if cod_municipio == '4205407':
+                    if not all([
+                        move.company_id.l10n_br_aedf,
+                        move.company_id.l10n_br_client_id,
+                        move.company_id.l10n_br_client_secret,
+                        move.company_id.l10n_br_user_password
+                    ]):
+                        errors.append('Campos de validação para a API de Florianópolis não estão preenchidos')
+                elif cod_municipio in ['3550308', '3106200']:
+                    for line in move.invoice_line_ids:
+                        if line.product_id.type == 'service':
+                            if not line.product_id.service_type_id:
+                                errors.append('Produto %s não possui Tipo de Serviço.' % line.product_id.name)
+                            if not line.product_id.service_code:
+                                errors.append('Produto %s não possui Código do Município.' % line.product_id.name)
+                else:
+                    if not move.company_id.l10n_br_nfse_token_acess:
+                        errors.append('Token da Focus não está preenchida!\nPor favor, preencha-a no cadastro da empresa.')
 
             partner = move.partner_id.commercial_partner_id
             company = move.company_id
@@ -171,7 +208,6 @@ class AccountMove(models.Model):
     def _prepare_eletronic_line_vals(self, invoice_lines):
         lines = []
         for line in invoice_lines:
-
             vals = line.get_eletronic_line_vals()
 
             lines.append((0, 0, vals))
@@ -290,6 +326,9 @@ class AccountMove(models.Model):
         return {
             'valor_icms': sum(line[2].get("icms_valor", 0) for line in lines),
             'valor_icmsst': sum(line[2].get("icms_st_valor", 0) for line in lines),
+            'valor_icms_uf_dest': sum(line[2].get("icms_uf_dest", 0) for line in lines),
+            'valor_icms_uf_remet': sum(line[2].get("icms_uf_remet", 0) for line in lines),
+            'valor_icms_fcp_uf_dest': sum(line[2].get("icms_fcp_uf_dest", 0) for line in lines),
             'valor_ipi': sum(line[2].get("ipi_valor", 0) for line in lines),
             'pis_valor': sum(line[2].get("pis_valor", 0) for line in lines),
             'cofins_valor': sum(line[2].get("cofins_valor", 0) for line in lines),
@@ -416,6 +455,8 @@ class AccountMoveLine(models.Model):
             #  'tributos_estimados': self.tributos_estimados,
             'ncm': self.product_id.l10n_br_ncm_id.code,
             'cest': self.product_id.l10n_br_cest,
+            'extipi': self.product_id.l10n_br_extipi,
+            'codigo_beneficio': self.product_id.l10n_br_fiscal_benefit,
             'pedido_compra': self.ref,
             # 'item_pedido_compra': self.item_pedido_compra,
             # - ICMS -
@@ -455,7 +496,7 @@ class AccountMoveLine(models.Model):
             # abs(self.pis_valor) if self.pis_valor < 0 else 0,
             # - COFINS -
             'cofins_cst': '49',
-            'cofins_aliquota':  cofins.tax_line_id.amount or 0,
+            'cofins_aliquota': cofins.tax_line_id.amount or 0,
             'cofins_base_calculo': self.price_total or 0,
             'cofins_valor': round(self.price_total * cofins.tax_line_id.amount / 100, 2),
             # 'cofins_valor_retencao':
@@ -473,7 +514,7 @@ class AccountMoveLine(models.Model):
             'csll_base_calculo': self.price_total or 0,
             'csll_valor': round(self.price_total * csll.tax_line_id.amount / 100, 2),
             # abs(self.csll_valor) if self.csll_valor < 0 else 0,
-            'irpj_aliquota':  irpj.tax_line_id.amount or 0,
+            'irpj_aliquota': irpj.tax_line_id.amount or 0,
             'irpj_base_calculo': self.price_total or 0,
             'irpj_valor': round(self.price_total * irpj.tax_line_id.amount / 100, 2),
             # 'irrf_base_calculo': self.irrf_base_calculo,
