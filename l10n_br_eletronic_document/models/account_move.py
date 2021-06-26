@@ -100,7 +100,8 @@ class AccountMove(models.Model):
 
             has_products = has_services = False
             # produtos
-            for eletr in move.invoice_line_ids:
+            doc_lines = move.invoice_line_ids.filtered(lambda x: not x.is_delivery_expense_or_insurance())
+            for eletr in doc_lines:
                 if eletr.product_id.type == 'service':
                     has_services = True
                 if eletr.product_id.type in ('consu', 'product'):
@@ -299,16 +300,28 @@ class AccountMove(models.Model):
         if iest_id:
             vals['iest'] = iest_id.name
 
+        # Duplicatas
+        duplicatas = []
+        count = 1
+        for parcela in invoice.receivable_move_line_ids.sorted(lambda x: x.date_maturity):
+            duplicatas.append((0, None, {
+                'numero_duplicata': "%03d" % count,
+                'data_vencimento': parcela.date_maturity,
+                'valor': parcela.credit or parcela.debit,
+            }))
+            count += 1
+        vals['duplicata_ids'] = duplicatas
+
         total_produtos = total_servicos = 0.0
         bruto_produtos = bruto_servicos = 0.0
         total_desconto = 0
         for inv_line in invoice_lines:
             total_desconto += round(inv_line.price_unit * inv_line.quantity * inv_line.discount / 100, 2)
             if inv_line.product_id.type == 'service':
-                total_servicos += inv_line.price_total
+                total_servicos += inv_line.price_subtotal
                 bruto_servicos += round(inv_line.quantity * inv_line.price_unit, 2)
             else:
-                total_produtos += inv_line.price_total
+                total_produtos += inv_line.price_subtotal
                 bruto_produtos += round(inv_line.quantity * inv_line.price_unit, 2)
 
         vals.update({
@@ -316,8 +329,16 @@ class AccountMove(models.Model):
             'valor_servicos': total_servicos,
             'valor_produtos': total_produtos,
             'valor_desconto': total_desconto,
-            'valor_final': total_produtos + total_servicos,
+            'valor_final': total_produtos + total_servicos + vals['valor_frete'] + vals['valor_seguro'] +
+                           vals['valor_despesas'],
         })
+
+        # Transportadora
+        if invoice.carrier_partner_id:
+            vals.update({
+                'modalidade_frete': invoice.modalidade_frete,
+                'transportadora_id': invoice.carrier_partner_id.id,
+            })
 
         return vals
 
@@ -363,7 +384,8 @@ class AccountMove(models.Model):
         vals['model'] = 'nfse'
         vals['document_line_ids'] = move._prepare_eletronic_line_vals(services)
         vals.update(self.sum_line_taxes(vals))
-        self.env['eletronic.document'].create(vals)
+        nfse = self.env['eletronic.document'].create(vals)
+        nfse._compute_legal_information()
 
     def _create_product_eletronic_document(self, move, products):
         vals = move._prepare_eletronic_doc_vals(products)
@@ -374,7 +396,18 @@ class AccountMove(models.Model):
 
         vals['document_line_ids'] = move._prepare_eletronic_line_vals(products)
         vals.update(self.sum_line_taxes(vals))
-        self.env['eletronic.document'].create(vals)
+        nfe = self.env['eletronic.document'].create(vals)
+        self._compute_nfe_volumes(nfe, move)
+        nfe._compute_legal_information()
+
+    def _compute_nfe_volumes(self, nfe, move):
+        self.env['nfe.volume'].create({
+            'eletronic_document_id': nfe.id,
+            'quantidade_volumes': move.quantidade_volumes,
+            'peso_liquido': move.peso_bruto,
+            'peso_bruto': move.peso_bruto,
+        })
+
 
     def _create_related_doc(self, vals):
         related_move_id = self.env['account.move'].search([
